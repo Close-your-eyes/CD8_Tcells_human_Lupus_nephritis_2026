@@ -273,6 +273,99 @@ Fig2A <- scexpr::feature_plot2(SO,
         legend.position = "inside", legend.position.inside = c(0.1,1), legend.justification = c(0,1))
 
 
+## ---- Fig2B -------
+## generic functions for clone/clonotype data frame prep and plotting
+prepare_clone_clonotype_df <- function(template_df) {
+  template_df %>%
+    dplyr::group_by(patient, body_fluid) %>%
+    dplyr::mutate(total = dplyr::n()) %>%
+    dplyr::ungroup() %>%
+    dplyr::group_by(patient, body_fluid, expansion_group, total) %>%
+    dplyr::summarise(n_per_expansion_group = dplyr::n(), .groups = "drop") %>%
+    dplyr::mutate(freq = n_per_expansion_group/total*100) %>%
+    dplyr::group_by(patient, body_fluid) %>%
+    dplyr::arrange(desc(expansion_group)) %>%
+    dplyr::mutate(freq_cumsum = cumsum(freq)) %>%
+    dplyr::mutate(freq_cumsum_lag = dplyr::lag(freq_cumsum, default = 0)) %>%
+    dplyr::mutate(label_ypos = freq_cumsum_lag + (freq_cumsum-freq_cumsum_lag)/2) %>%
+    dplyr::ungroup()
+}
+plot_prepare_clone_clonotype_df <- function(prepared_df, geom_text_size = 4, ...) {
+  ggplot(prepared_df, aes(x = patient, y = freq, fill = expansion_group, label = n_per_expansion_group)) +
+    geom_col(position = position_stack(), color = "white") +
+    colrr::theme_material(white = T) + 
+    theme(legend.title = element_text(), axis.text.x = element_text(angle = 90, vjust = 0.5),
+          strip.text = element_text(face = "bold", size = 14)) +
+    geom_text(data = prepared_df %>% dplyr::filter(freq > 3), aes(y = label_ypos, color = expansion_group), show.legend = F, size = geom_text_size) +
+    geom_text(data = prepared_df %>% dplyr::distinct(patient, body_fluid, total), aes(x = patient, label = total), y = 105, inherit.aes = F, size = geom_text_size) +
+    facet_wrap(vars(body_fluid), axes = "all", ...) +
+    labs(x = "", y = "frequency [%]") +
+    expand_limits(y = c(0, 105)) +
+    scale_fill_manual(values = rev(c("grey15", "grey75", rev(colrr::col_pal("RColorBrewer::Reds", n = 9)[c(2,4,6,8)])))) +
+    scale_color_manual(values = rev(c("white", "black", "white", "black", "black", "black"))) +
+    scale_y_continuous(breaks = c(0,25,50,75,100))
+}
+
+legend_title <- "expansion<br>level of<br>transcriptomes<br>from<br>*CCR7*<sup> -</sup> CD8<br>clusters"
+y_axis_title <- "frequency of transcriptomes [%]"
+p_expansion_degree_list <- lapply(setNames(c("GEX_all", "GEX_CD8", "GEX_CD8_EM"),
+                                           c("GEX_all", "GEX_CD8", "GEX_CD8_EM")), function(x) {
+                                             
+                                             clones_GEX_template <- dplyr::filter(SO@meta.data, patient != "Pat1")
+          
+                                             if (x == "GEX_CD8") {
+                                               ### FILTER FOR CD8 CLUSTERS HERE
+                                               clones_GEX_template <- dplyr::filter(clones_GEX_template, clusters %in% c("CD8_CCL5", "CD8_MKI67", "CD8_HSPA1A", "CD8_CCR7")) %>%
+                                                 dplyr::mutate(body_fluid = paste0("CD8 naive + EM", body_fluid))
+                                             }
+                                             if (x == "GEX_CD8_EM") {
+                                               ### FILTER FOR CD8 CLUSTERS HERE
+                                               clones_GEX_template <- dplyr::filter(clones_GEX_template, clusters %in% c("CD8_CCL5", "CD8_MKI67", "CD8_HSPA1A")) %>%
+                                                 dplyr::mutate(body_fluid = paste0("CD8 EM ", body_fluid))
+                                             }
+                                             
+                                             clones_GEX_template <-
+                                               clones_GEX_template %>%
+                                               dplyr::select(cl_count_per_sample_vdj, patient, body_fluid, cl_name, cdr3_TRA, cdr3_TRB) %>%
+                                               dplyr::mutate(expansion_group = cut(cl_count_per_sample_vdj, breaks = c(1,2,5,10,max(clones_GEX_template$cl_count_per_sample_vdj, na.rm = T)),
+                                                                                   include.lowest = T,
+                                                                                   right = F)) %>%
+                                               dplyr::mutate(expansion_group = as.character(expansion_group)) %>%
+                                               dplyr::mutate(expansion_group = ifelse(expansion_group == "[1,2)", "unique", expansion_group)) %>%
+                                               dplyr::mutate(expansion_group = ifelse(expansion_group == "[2,5)", "[2,4]", expansion_group)) %>%
+                                               dplyr::mutate(expansion_group = ifelse(expansion_group == "[5,10)", "[5,9]", expansion_group)) %>%
+                                               dplyr::mutate(expansion_group = ifelse(is.na(expansion_group) & is.na(cdr3_TRA) & is.na(cdr3_TRB), "no TCR", expansion_group)) %>%
+                                               dplyr::mutate(expansion_group = ifelse(is.na(expansion_group) & (!is.na(cdr3_TRA) | !is.na(cdr3_TRB)), "multi TCR", expansion_group)) %>%
+                                               dplyr::mutate(expansion_group = factor(expansion_group, levels = c("unique", "[2,4]", "[5,9]", paste0("[10,", max(clones_GEX_template$cl_count_per_sample_vdj, na.rm = T), "]"), "multi TCR", "no TCR")))
+                                             
+                                             clones_GEX <- prepare_clone_clonotype_df(clones_GEX_template)
+                                             p_clones_GEX_1row <- plot_prepare_clone_clonotype_df(clones_GEX, nrow = 1, geom_text_size = 3.3) + labs(y = y_axis_title, fill = legend_title)
+                                             p_clones_GEX_1col <- plot_prepare_clone_clonotype_df(clones_GEX, ncol = 1, geom_text_size = 3.3) + labs(y = y_axis_title, fill = legend_title)
+                                             clonotypes_GEX <- prepare_clone_clonotype_df(clones_GEX_template %>% dplyr::distinct(patient, body_fluid, cl_name, expansion_group) %>% dplyr::filter(expansion_group != "no TCR")) # this line is decisive for clones vs. clonotypes
+                                             p_clonotypes_GEX <- plot_prepare_clone_clonotype_df(clonotypes_GEX, geom_text_size = 3.3) + labs(y = y_axis_title, fill = legend_title)
+                                             
+                                             
+                                             return(list(clones_GEX_template = clones_GEX_template,
+                                                         clones_GEX = clones_GEX,
+                                                         p_clones_GEX_1row = p_clones_GEX_1row,
+                                                         p_clones_GEX_1col = p_clones_GEX_1col,
+                                                         clonotypes_GEX = clonotypes_GEX,
+                                                         p_clonotypes_GEX = p_clonotypes_GEX))
+                                           })
+
+
+Fig2B <-
+  p_expansion_degree_list[["GEX_CD8_EM"]][["p_clones_GEX_1col"]] +
+  coord_flip() +
+  ggtext::geom_richtext(inherit.aes = F, aes(y = 115, x = 3, label = label),
+                        data = data.frame(body_fluid = c("CD8 EM urine", "CD8 EM blood"),
+                                          label = c("urine", "blood")),
+                        angle = -90, label.colour = "white", fill = "grey95",
+                        label.padding = unit(c(0.4, 2, 0.4, 2), "lines")) +
+  theme(axis.text.x = element_text(angle = 0), strip.text = element_blank(), legend.title = ggtext::element_markdown(),
+        legend.text = element_text(size = 10))
+
+
 
 
 ## ---- Fig2C ------
@@ -556,6 +649,88 @@ p_ovlp_boxplots2 <- ggplot(ovlp_index_df2, aes(x = c2, y = ovlp_index)) +
                              size = 4, vjust = 1) +
   ylim(NA, 35)
 Fig2G <- p_ovlp_boxplots2
+
+
+## ---- Fig2H -------
+# table from https://www.pnas.org/doi/full/10.1073/pnas.1808790115
+surfaceome_master <-
+  vroom::vroom("table_S3_surfaceome.csv.gz", .name_repair = make.names) |> 
+  dplyr::mutate(Surfaceome.Label = ifelse(UniProt.gene %in% c("KLRD1", "KLRC4", "B2M",
+                                                              "LTB", "IFITM2", "CD99",
+                                                              "IFITM1", "IFITM3", "AQP3",
+                                                              "ITM2A",
+                                                              "CLPTM1",
+                                                              "CMTM3",
+                                                              "CMTM6",
+                                                              "CMTM7",
+                                                              "TRAV21",
+                                                              "TRBC1",
+                                                              "TRBC2",
+                                                              "TRGV3",
+                                                              "TRGV4",
+                                                              "TRGV7",
+                                                              "TRBV12-3",
+                                                              "ADGRG1",
+                                                              "TRGV8"), "surface", Surfaceome.Label))
+# fixed version of MetaVolcanoR::rem_mv needed
+# devtools::install_github("https://github.com/Close-your-eyes/MetaVolcanoR", ref = "fix_rem_mv")
+# install.packages("ggrepel")
+# install.packages("ggnewscale")
+
+surfprot <-
+  surfaceome_master %>%
+  dplyr::filter(Surfaceome.Label == "surface") %>%
+  dplyr::pull(UniProt.gene)
+surfprot <- c(surfprot, grep("TR[ABGD][VC]", rownames(scexpr::get_layer(SO_CD8_eff, assay = "RNA", layer = "data")), value = T))
+volc_data1 <- lapply(setNames(unique(SO_CD8_eff@meta.data$patient), unique(SO_CD8_eff@meta.data$patient))[-1], function(x) {
+  volc_data <- scexpr::volcano01_calc(SO = SO_CD8_eff,
+                                      neg_cells = SO_CD8_eff@meta.data %>% dplyr::filter(body_fluid == "blood") %>% dplyr::filter(clusters %in% c("CD8_GZMK", "CD8_GNLY", "CD8_IL7R")) %>% dplyr::filter(patient == x) %>% rownames(.),
+                                      pos_cells = SO_CD8_eff@meta.data %>% dplyr::filter(body_fluid == "blood") %>% dplyr::filter(clusters %in% c("CD8_CX3CR1")) %>% dplyr::filter(patient == x) %>% rownames(.),
+                                      neg_name = "CD8_GZMK_GNLY_IL7R",
+                                      pos_name = "CD8_CX3CR1",
+                                      method = "limma")
+  return(as.data.frame(volc_data[["df"]]))
+})
+
+meta_volc1 <- MetaVolcanoR::rem_mv(volc_data1,
+                                   pcriteria = "p_val_adj",
+                                   foldchangecol = "avg_log2FC",
+                                   genenamecol = "feature",
+                                   ncores = 5)
+
+meta_volc_df1 <- dplyr::mutate(meta_volc1$metaresult, surface_prot = ifelse(feature %in% surfprot, "cell surface protein", "intracellular protein"))
+Fig2H <- ggplot(meta_volc_df1, aes(x = randomSummary, y = -log10(randomP), color = surface_prot)) +
+  geom_hline(yintercept = -log10(c(0.05)), color = "grey70", linetype = "dashed") +
+  geom_point(data = meta_volc_df1 %>% dplyr::filter(surface_prot == "intracellular protein")) +
+  geom_point(data = meta_volc_df1 %>% dplyr::filter(surface_prot == "cell surface protein")) +
+  colrr::theme_material(white = T)
+  scale_color_manual(values = c("black", "grey80")) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  #labs(x = "up in blood CD8_eff_GZMK/GZMB/IL7R <-- summary log<sub>2</sub>(FC) --> up in blood CD8_eff_CX3CR1", color = "coding for\ncell surface\nprotein", y = "-log<sub>10</sub>(summary adj *p*-value)") +
+  labs(x = "CD8_<span style='color:#009E73;'>GZMK</span><span style='color:#CC79A7;'>GNLY</span><span style='color:#999999;'>IL7R</span><br><-- summary log<sub>2</sub>(FC) --><br><span style = 'color:#56B4E9;'>CD8_CX3CR1</span>", color = "coding for", y = "-log<sub>10</sub>(summary adj *p*-value)") +
+  ggnewscale::new_scale_color() +
+  ggrepel::geom_text_repel(data = meta_volc_df1 %>%
+                             dplyr::filter((surface_prot == "cell surface protein" & -log10(randomP) > 10 & abs(randomSummary) > 0.2) |
+                                             (surface_prot == "cell surface protein" & (randomSummary > 0.5 | -log10(randomP) > 8)) |
+                                             (surface_prot == "cell surface protein" & randomSummary < -0.5) |
+                                             (surface_prot == "intracellular protein" & -log10(randomP) > 10 & abs(randomSummary) > 0.5) |
+                                             (surface_prot == "intracellular protein" & abs(randomSummary) > 0.7)), aes(label = feature, color = surface_prot),
+                           show.legend = F,
+                           max.overlaps = 100,
+                           max.time = 5,
+                           max.iter = 10000,
+                           force = 10,
+                           size = 4,
+                           fontface = "italic") +
+  scale_color_manual(values = c("black", "grey50")) +
+  theme(legend.title = element_text(), axis.title.x = ggtext::element_markdown(), axis.title.y = ggtext::element_markdown(),
+        legend.position = c(0,1), legend.justification = c(0,1),
+        legend.key.size = ggplot2::unit(0.3, "cm"),
+        legend.key.width = ggplot2::unit(0.3, "cm"),
+        strip.background = element_rect(fill = "grey95", color = "white"),
+        strip.text.x = element_text(vjust = 0, size = 12)) +
+  facet_wrap(vars("blood"))
+
 
 
 ## ----- Fig3E ---------
